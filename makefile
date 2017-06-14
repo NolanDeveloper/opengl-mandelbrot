@@ -1,4 +1,4 @@
-LDLIBS += -lGL -lGLEW -lX11
+LDLIBS += -lGL -lGLEW -lX11 -lm
 CFLAGS += -g
 
 main: main.o

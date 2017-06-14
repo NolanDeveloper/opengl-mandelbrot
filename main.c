@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <time.h>
 #include <unistd.h>
 #include <X11/Xlib.h>
@@ -54,11 +55,10 @@ static GLXContext context;
 static Colormap cmap;
 static int running;
 
-static double colors[][4] = {
-    { 0.2, 0.2, 0.2, 1.0 },
-    { 0.1, 0.1, 0.1, 1.0 },
-    { 0.0, 0.0, 0.0, 1.0 },
-};
+static int window_width;
+static int window_height;
+
+//static mat4_t projection_matrix;
 
 // An array of 3 vectors which represents 3 vertices
 static const GLfloat g_vertex_buffer_data[] = {
@@ -68,8 +68,43 @@ static const GLfloat g_vertex_buffer_data[] = {
 };
 // This will identify our vertex buffer
 static GLuint vertexbuffer;
-
 static struct timespec last_reset_time;
+static GLuint shader_program_id;
+
+static const char * vertex_shader =
+    "#version 130\n"
+    "uniform mat4 projection;\n"
+    "in vec3 in_Position;\n"
+    "out vec3 ex_Color;\n"
+    "void main(void)\n"
+    "{\n"
+    "    gl_Position = vec4(in_Position, 1.0) * projection;\n"
+    "    ex_Color = vec3(1.0, 0.0, 0.0);\n"
+    "}";
+static const char * fragment_shader =
+    "#version 130\n"
+    "in vec3 ex_Color;\n"
+    "out vec4 out_Color;\n"
+    "void main(void)\n"
+    "{\n"
+    "    out_Color = vec4(ex_Color,1.0);\n"
+    "}";
+
+static GLuint compile_shader(const char * source, GLenum shader_type) {
+    GLuint shader = glCreateShader(shader_type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    // Determine compile status
+    GLint result = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &result);
+    if (GL_TRUE != result) {
+        char message[256];
+        glGetShaderInfoLog(shader, sizeof(message), NULL, message);
+        puts(message);
+        exit(-1);
+    }
+    return shader;
+}
 
 static void
 init_scene() {
@@ -81,6 +116,22 @@ init_scene() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data),
         g_vertex_buffer_data, GL_STATIC_DRAW);
     clock_gettime(CLOCK_MONOTONIC, &last_reset_time);
+    //projection_matrix = mat4_ortho(-1., 1., -1, 1., 1, -1., NULL);
+    GLuint vertex_shader_id = compile_shader(vertex_shader, GL_VERTEX_SHADER);
+    GLuint fragment_shader_id = compile_shader(fragment_shader, GL_FRAGMENT_SHADER);
+    shader_program_id = glCreateProgram();
+    glAttachShader(shader_program_id, vertex_shader_id);
+    glAttachShader(shader_program_id, fragment_shader_id);
+    glLinkProgram(shader_program_id);
+    GLint result = GL_FALSE;
+    glGetProgramiv(shader_program_id, GL_LINK_STATUS, &result);
+    if (GL_TRUE != result) {
+        char message[256];
+        glGetProgramInfoLog(shader_program_id, sizeof(message), NULL, message);
+        puts(message);
+        exit(-1);
+    }
+    glClearColor(0, 0, 0, 0);
 }
 
 static double
@@ -88,23 +139,48 @@ difference_in_seconds(struct timespec * a, struct timespec * b) {
     return (double) (a->tv_sec - b->tv_sec) + (a->tv_nsec - b->tv_nsec) / 1e9;
 }
 
+static double angle = 0;
+
 static void
 draw_scene() {
     static int frames = 0;
     struct timespec current_time;
     clock_gettime(CLOCK_MONOTONIC, &current_time);
     double dt = difference_in_seconds(&current_time, &last_reset_time);
-    if (0.1 < dt) {
+    if (1 < dt) {
         printf("fps: %lf\n", frames / dt);
         last_reset_time = current_time;
         frames = 0;
     }
     ++frames;
-    static int call_id = 0;
-    double (*color)[4] = &colors[call_id];
-    call_id = (call_id + 1) % (sizeof(colors) / sizeof(colors[0]));
-    glClearColor((*color)[0], (*color)[1], (*color)[2], (*color)[3]);
     glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(shader_program_id);
+    int projection_location =
+        glGetUniformLocation(shader_program_id, "projection");
+    static float projection[4 * 4];
+    projection[0 * 4 + 0] = cos(angle);
+    projection[0 * 4 + 1] = -sin(angle);
+    projection[0 * 4 + 2] = 0;
+    projection[0 * 4 + 3] = 0;
+
+    projection[1 * 4 + 0] = sin(angle);
+    projection[1 * 4 + 1] = cos(angle);
+    projection[1 * 4 + 2] = 0;
+    projection[1 * 4 + 3] = 0;
+
+    projection[2 * 4 + 0] = 0;
+    projection[2 * 4 + 1] = 0;
+    projection[2 * 4 + 2] = 1;
+    projection[2 * 4 + 3] = 0;
+
+    projection[3 * 4 + 0] = 0;
+    projection[3 * 4 + 1] = 0;
+    projection[3 * 4 + 2] = 0;
+    projection[3 * 4 + 3] = 1;
+
+    angle += 0.002;
+
+    glUniformMatrix4fv(projection_location, 1, GL_FALSE, projection);
     // 1rst attribute buffer : vertices
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
@@ -121,11 +197,14 @@ draw_scene() {
     glDrawArrays(GL_TRIANGLES, 0, 3); // Starting from vertex 0;
                                       // 3 vertices total -> 1 triangle
     glDisableVertexAttribArray(0);
+    glFlush();
 }
 
 static void
 process_resize_event(int width, int height) {
     glViewport(0, 0, width, height);
+    window_width = width;
+    window_height = height;
 }
 
 static void init_glew() {
