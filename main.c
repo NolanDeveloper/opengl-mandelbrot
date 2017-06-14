@@ -50,6 +50,8 @@ static XEvent event;
 static Display * display;
 static int screen;
 static Window window;
+static GLXContext context;
+static Colormap cmap;
 static int running;
 
 static double colors[][4] = {
@@ -70,7 +72,7 @@ static GLuint vertexbuffer;
 static struct timespec last_reset_time;
 
 static void
-prepare_scene() {
+init_scene() {
     // Generate 1 buffer, put the resulting identifier in vertexbuffer
     glGenBuffers(1, &vertexbuffer);
     // The following commands will talk about our 'vertexbuffer' buffer
@@ -107,7 +109,8 @@ draw_scene() {
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
     glVertexAttribPointer(
-       0,                  // attribute 0. No particular reason for 0, but must match the layout in the shader.
+       0,                  // attribute 0. No particular reason for 0,
+                           //     but must match the layout in the shader.
        3,                  // size
        GL_FLOAT,           // type
        GL_FALSE,           // normalized?
@@ -115,12 +118,26 @@ draw_scene() {
        (void*)0            // array buffer offset
     );
     // Draw the triangle !
-    glDrawArrays(GL_TRIANGLES, 0, 3); // Starting from vertex 0; 3 vertices total -> 1 triangle
+    glDrawArrays(GL_TRIANGLES, 0, 3); // Starting from vertex 0;
+                                      // 3 vertices total -> 1 triangle
     glDisableVertexAttribArray(0);
 }
 
-int
-main(int argc, char * argv[]) {
+static void
+process_resize_event(int width, int height) {
+    glViewport(0, 0, width, height);
+}
+
+static void init_glew() {
+    // Obtain opengl function addresses
+    GLenum err = glewInit();
+    if (GLEW_OK != err) {
+        printf("Error: %s\n", glewGetErrorString(err));
+        exit(-1);
+    }
+}
+
+static void init_opengl_window() {
     display = XOpenDisplay(NULL);
     if (!display) {
         printf("Failed to open X display\n");
@@ -184,7 +201,7 @@ main(int argc, char * argv[]) {
         }
         XFree(vi);
     }
-    GLXFBConfig bestFbc = fbc[0];
+    GLXFBConfig bestFbc = fbc[best_fbc];
     // Be sure to free the FBConfig list allocated by glXChooseFBConfig()
     XFree(fbc);
     // Get a visual
@@ -192,7 +209,6 @@ main(int argc, char * argv[]) {
     printf("Chosen visual ID = 0x%lx\n", vi->visualid);
     printf("Creating colormap\n" );
     XSetWindowAttributes swa;
-    Colormap cmap;
     swa.colormap = cmap = XCreateColormap(display,
         RootWindow(display, vi->screen), vi->visual, AllocNone);
     swa.background_pixmap = None;
@@ -218,7 +234,6 @@ main(int argc, char * argv[]) {
     glXCreateContextAttribsARBProc glXCreateContextAttribsARB = 0;
     glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc)
         glXGetProcAddressARB((const GLubyte *) "glXCreateContextAttribsARB");
-    GLXContext context = 0;
     XSetErrorHandler(&context_error_handler);
     // Check for the GLX_ARB_create_context extension string and the function.
     if (!is_extension_supported(glxExts, "GLX_ARB_create_context") ||
@@ -245,31 +260,44 @@ main(int argc, char * argv[]) {
     }
     printf("Making context current\n");
     glXMakeCurrent(display, window, context);
-    // Obtain opengl function addresses
-    GLenum err = glewInit();
-    if (GLEW_OK != err) {
-        printf("Error: %s\n", glewGetErrorString(err));
-        exit(-1);
-    }
     Atom delete_atom = XInternAtom(display, "WM_DELETE_WINDOW", True);
     XSetWMProtocols(display, window, &delete_atom, 1);
-    prepare_scene();
-    running = 1;
-    while (running) {
-        while (XPending(display)) {
-            XNextEvent(display, &event);
-            if (event.type == ClientMessage) {
-                running = 0;
-                break;
-            }
-        }
-        draw_scene();
-        glXSwapBuffers(display, window);
-    }
+}
+
+static void
+free_opengl_window() {
     glXMakeCurrent(display, 0, 0);
     glXDestroyContext(display, context);
     XDestroyWindow(display, window);
     XFreeColormap(display, cmap);
     XCloseDisplay(display);
+}
+
+int
+main(int argc, char * argv[]) {
+    init_opengl_window();
+    init_glew();
+    init_scene();
+    running = 1;
+    while (running) {
+        while (XPending(display)) {
+            XNextEvent(display, &event);
+            switch (event.type) {
+            case ClientMessage:
+                running = 0;
+                break;
+            case ConfigureNotify: {
+                int width = event.xconfigure.width;
+                int height = event.xconfigure.height;
+                process_resize_event(width, height);
+                printf("resize: %dx%d\n", width, height);
+                break;
+            }
+            }
+        }
+        draw_scene();
+        glXSwapBuffers(display, window);
+    }
+    free_opengl_window();
     return 0;
 }
