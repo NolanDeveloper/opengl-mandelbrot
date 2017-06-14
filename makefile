@@ -1,7 +1,10 @@
 LDLIBS += -lGL -lGLEW -lX11 -lm
 CFLAGS += -g
 
-main: main.o
+OBJ += main.o
+OBJ += framework.o
+
+main: $(OBJ)
 
 clean:
-	$(RM) main.o main
+	$(RM) $(OBJ) main

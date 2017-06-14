@@ -1,75 +1,29 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <math.h>
 #include <time.h>
-#include <unistd.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <GL/glew.h>
 #include <GL/gl.h>
-#include <GL/glx.h>
 
-#define GLX_CONTEXT_MAJOR_VERSION_ARB             0x2091
-#define GLX_CONTEXT_MINOR_VERSION_ARB             0x2092
-
-typedef GLXContext (*glXCreateContextAttribsARBProc) (
-        Display *, GLXFBConfig, GLXContext, Bool, const int *);
-
-static int
-is_extension_supported(const char * extList, const char * extension) {
-    const char * start;
-    const char * where;
-    const char * terminator;
-    where = strchr(extension, ' ');
-    if (where || *extension == '\0') return 0;
-    start = extList;
-    while (1) {
-        where = strstr(start, extension);
-        if (!where) break;
-        terminator = where + strlen(extension);
-        if (where == start || *(where - 1) == ' ') {
-            if (*terminator == ' ' || *terminator == '\0') {
-                return 1;
-            }
-        }
-        start = terminator;
-    }
-    return 0;
-}
-
-static int
-context_error_handler(Display * display, XErrorEvent * error_event) {
-    char buf[256];
-    XGetErrorText(display, error_event->error_code, buf, 256);
-    fputs(buf, stderr);
-    fputs("\n", stderr);
-    exit(-1);
-}
-
-static XEvent event;
-static Display * display;
-static int screen;
-static Window window;
-static GLXContext context;
-static Colormap cmap;
-static int running;
-
-static int window_width;
-static int window_height;
-
-//static mat4_t projection_matrix;
+#include "framework.h"
 
 // An array of 3 vectors which represents 3 vertices
 static const GLfloat g_vertex_buffer_data[] = {
-    -1.0f, -1.0f, 0.0f,
-     1.0f, -1.0f, 0.0f,
-     0.0f,  1.0f, 0.0f,
+    50, 50, 0,
+    300, 50, 0,
+    75, 300, 0
 };
 // This will identify our vertex buffer
 static GLuint vertexbuffer;
 static struct timespec last_reset_time;
 static GLuint shader_program_id;
+
+static struct {
+    int x;
+    int y;
+    int width;
+    int height;
+} window;
 
 static const char * vertex_shader =
     "#version 130\n"
@@ -79,7 +33,7 @@ static const char * vertex_shader =
     "void main(void)\n"
     "{\n"
     "    gl_Position = vec4(in_Position, 1.0) * projection;\n"
-    "    ex_Color = vec3(1.0, 0.0, 0.0);\n"
+    "    ex_Color = vec3(244, 226, 66)/256;\n"
     "}";
 static const char * fragment_shader =
     "#version 130\n"
@@ -90,7 +44,8 @@ static const char * fragment_shader =
     "    out_Color = vec4(ex_Color,1.0);\n"
     "}";
 
-static GLuint compile_shader(const char * source, GLenum shader_type) {
+static GLuint
+compile_shader(const char * source, GLenum shader_type) {
     GLuint shader = glCreateShader(shader_type);
     glShaderSource(shader, 1, &source, NULL);
     glCompileShader(shader);
@@ -106,6 +61,70 @@ static GLuint compile_shader(const char * source, GLenum shader_type) {
     return shader;
 }
 
+static float projection_matrix[4][4];
+static float view_matrix[4][4];
+
+static void
+orthogonal_projection(float width, float height) {
+    float l = 0;
+    float r = width;
+    float t = 0;
+    float b = height;
+    float f = 1;
+    float n = -1;
+    projection_matrix[0][0] = 2 / (r - l);
+    projection_matrix[0][1] = 0;
+    projection_matrix[0][2] = 0;
+    projection_matrix[0][3] = -(r + l) / (r - l);
+    projection_matrix[1][0] = 0;
+    projection_matrix[1][1] = 2 / (t - b);
+    projection_matrix[1][2] = 0;
+    projection_matrix[1][3] = -(t + b) / (t - b);
+    projection_matrix[2][0] = 0;
+    projection_matrix[2][1] = 0;
+    projection_matrix[2][2] = -2 / (f - n);
+    projection_matrix[2][3] = -(f + n) / (f - n);
+    projection_matrix[3][0] = 0;
+    projection_matrix[3][1] = 0;
+    projection_matrix[3][2] = 0;
+    projection_matrix[3][3] = 1;
+}
+
+static void
+mat4_multiply(float * a, float * b, float * out) {
+    for (int i = 0; i < 4; ++i) {
+        int i4 = 4 * i;
+        for (int j = 0; j < 4; ++j) {
+            out[i4 + j] = 0;
+            for (int k = 0; k < 4; ++k) {
+                out[i4 + j] += a[i4 + k] * b[4 * k + j];
+            }
+        }
+    }
+}
+
+static void
+rotate_z(double angle) {
+    float cos_angle = cos(angle);
+    float sin_angle = sin(angle);
+    view_matrix[0][0] = cos_angle;
+    view_matrix[0][1] = -sin_angle;
+    view_matrix[0][2] = 0;
+    view_matrix[0][3] = 0;
+    view_matrix[1][0] = sin_angle;
+    view_matrix[1][1] = cos_angle;
+    view_matrix[1][2] = 0;
+    view_matrix[1][3] = 0;
+    view_matrix[2][0] = 0;
+    view_matrix[2][1] = 0;
+    view_matrix[2][2] = 1;
+    view_matrix[2][3] = 0;
+    view_matrix[3][0] = 0;
+    view_matrix[3][1] = 0;
+    view_matrix[3][2] = 0;
+    view_matrix[3][3] = 1;
+}
+
 static void
 init_scene() {
     // Generate 1 buffer, put the resulting identifier in vertexbuffer
@@ -116,9 +135,9 @@ init_scene() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data),
         g_vertex_buffer_data, GL_STATIC_DRAW);
     clock_gettime(CLOCK_MONOTONIC, &last_reset_time);
-    //projection_matrix = mat4_ortho(-1., 1., -1, 1., 1, -1., NULL);
     GLuint vertex_shader_id = compile_shader(vertex_shader, GL_VERTEX_SHADER);
-    GLuint fragment_shader_id = compile_shader(fragment_shader, GL_FRAGMENT_SHADER);
+    GLuint fragment_shader_id = compile_shader(fragment_shader,
+        GL_FRAGMENT_SHADER);
     shader_program_id = glCreateProgram();
     glAttachShader(shader_program_id, vertex_shader_id);
     glAttachShader(shader_program_id, fragment_shader_id);
@@ -132,6 +151,7 @@ init_scene() {
         exit(-1);
     }
     glClearColor(0, 0, 0, 0);
+    orthogonal_projection(window.width, window.height);
 }
 
 static double
@@ -157,226 +177,49 @@ draw_scene() {
     glUseProgram(shader_program_id);
     int projection_location =
         glGetUniformLocation(shader_program_id, "projection");
-    static float projection[4 * 4];
-    projection[0 * 4 + 0] = cos(angle);
-    projection[0 * 4 + 1] = -sin(angle);
-    projection[0 * 4 + 2] = 0;
-    projection[0 * 4 + 3] = 0;
-
-    projection[1 * 4 + 0] = sin(angle);
-    projection[1 * 4 + 1] = cos(angle);
-    projection[1 * 4 + 2] = 0;
-    projection[1 * 4 + 3] = 0;
-
-    projection[2 * 4 + 0] = 0;
-    projection[2 * 4 + 1] = 0;
-    projection[2 * 4 + 2] = 1;
-    projection[2 * 4 + 3] = 0;
-
-    projection[3 * 4 + 0] = 0;
-    projection[3 * 4 + 1] = 0;
-    projection[3 * 4 + 2] = 0;
-    projection[3 * 4 + 3] = 1;
-
-    angle += 0.002;
-
-    glUniformMatrix4fv(projection_location, 1, GL_FALSE, projection);
-    // 1rst attribute buffer : vertices
-    glEnableVertexAttribArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
-    glVertexAttribPointer(
-       0,                  // attribute 0. No particular reason for 0,
-                           //     but must match the layout in the shader.
-       3,                  // size
-       GL_FLOAT,           // type
-       GL_FALSE,           // normalized?
-       0,                  // stride
-       (void*)0            // array buffer offset
-    );
-    // Draw the triangle !
-    glDrawArrays(GL_TRIANGLES, 0, 3); // Starting from vertex 0;
-                                      // 3 vertices total -> 1 triangle
-    glDisableVertexAttribArray(0);
-    glFlush();
+    angle += 0.02;
+    for (int i = 0; i < 4; ++i) {
+        rotate_z(angle + 3.14 / 2 * i);
+        float accumulated_projection_matrix[4][4];
+        mat4_multiply((float *)projection_matrix, (float *)view_matrix,
+            (float *)accumulated_projection_matrix);
+        glUniformMatrix4fv(projection_location, 1, GL_FALSE,
+            (float *)accumulated_projection_matrix);
+        // 1rst attribute buffer : vertices
+        glEnableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
+        glVertexAttribPointer(
+           0,                  // attribute 0. No particular reason for 0,
+                               //     but must match the layout in the shader.
+           3,                  // size
+           GL_FLOAT,           // type
+           GL_FALSE,           // normalized?
+           0,                  // stride
+           (void*)0            // array buffer offset
+        );
+        // Draw the triangle !
+        glDrawArrays(GL_TRIANGLES, 0, 3); // Starting from vertex 0;
+                                          // 3 vertices total -> 1 triangle
+        glDisableVertexAttribArray(0);
+    }
 }
 
 static void
-process_resize_event(int width, int height) {
+process_resize_event(int x, int y, int width, int height) {
     glViewport(0, 0, width, height);
-    window_width = width;
-    window_height = height;
-}
-
-static void init_glew() {
-    // Obtain opengl function addresses
-    GLenum err = glewInit();
-    if (GLEW_OK != err) {
-        printf("Error: %s\n", glewGetErrorString(err));
-        exit(-1);
-    }
-}
-
-static void init_opengl_window() {
-    display = XOpenDisplay(NULL);
-    if (!display) {
-        printf("Failed to open X display\n");
-        exit(1);
-    }
-    screen = DefaultScreen(display);
-    // Get a matching FB config
-    static int visual_attribs[] = {
-        GLX_X_RENDERABLE,   True,
-        GLX_DRAWABLE_TYPE,  GLX_WINDOW_BIT,
-        GLX_RENDER_TYPE,    GLX_RGBA_BIT,
-        GLX_X_VISUAL_TYPE,  GLX_TRUE_COLOR,
-        GLX_RED_SIZE,       8,
-        GLX_GREEN_SIZE,     8,
-        GLX_BLUE_SIZE,      8,
-        GLX_ALPHA_SIZE,     8,
-        GLX_DEPTH_SIZE,     24,
-        GLX_STENCIL_SIZE,   8,
-        GLX_DOUBLEBUFFER,   True,
-#if 0
-        GLX_SAMPLE_BUFFERS, 1, // <-- MSAA
-        GLX_SAMPLES,        4, // <-- MSAA
-#endif
-        None
-    };
-    int glx_major, glx_minor;
-    // FBConfigs were added in GLX version 1.3.
-    if (!glXQueryVersion(display, &glx_major, &glx_minor) ||
-            ((glx_major == 1) && (glx_minor < 3)) || (glx_major < 1)) {
-        printf("Invalid GLX version");
-        exit(1);
-    }
-    printf("Getting matching framebuffer configs\n");
-    int fbcount;
-    GLXFBConfig * fbc =
-        glXChooseFBConfig(display, screen, visual_attribs, &fbcount);
-    if (!fbc) {
-        printf("Failed to retrieve a framebuffer config\n");
-        exit(1);
-    }
-    printf("Found %d matching FB configs.\n", fbcount);
-    // Pick the FB config/visual with the most samples per pixel
-    printf("Getting XVisualInfos\n");
-    int best_fbc = -1;
-    int best_num_samp = -1;
-    int i;
-    for (i = 0; i < fbcount; ++i) {
-        XVisualInfo * vi = glXGetVisualFromFBConfig(display, fbc[i]);
-        if (vi) {
-            int samp_buf;
-            int samples;
-            glXGetFBConfigAttrib(display, fbc[i], GLX_SAMPLE_BUFFERS, &samp_buf);
-            glXGetFBConfigAttrib(display, fbc[i], GLX_SAMPLES, &samples);
-            printf("    Matching fbconfig %d, visual ID 0x%2lx:"
-                   " SAMPLE_BUFFERS = %d, SAMPLES = %d\n",
-                   i, vi->visualid, samp_buf, samples);
-            if (best_fbc < 0 || samp_buf && samples > best_num_samp) {
-                best_fbc = i;
-                best_num_samp = samples;
-            }
-        }
-        XFree(vi);
-    }
-    GLXFBConfig bestFbc = fbc[best_fbc];
-    // Be sure to free the FBConfig list allocated by glXChooseFBConfig()
-    XFree(fbc);
-    // Get a visual
-    XVisualInfo * vi = glXGetVisualFromFBConfig(display, bestFbc);
-    printf("Chosen visual ID = 0x%lx\n", vi->visualid);
-    printf("Creating colormap\n" );
-    XSetWindowAttributes swa;
-    swa.colormap = cmap = XCreateColormap(display,
-        RootWindow(display, vi->screen), vi->visual, AllocNone);
-    swa.background_pixmap = None;
-    swa.border_pixel = 0;
-    swa.event_mask = StructureNotifyMask;
-    printf("Creating window\n");
-    window = XCreateWindow(display, RootWindow(display, vi->screen),
-        0, 0, 640, 480, 0, vi->depth, InputOutput, vi->visual,
-        CWBorderPixel | CWColormap | CWEventMask, &swa);
-    if (!window) {
-        printf("Failed to create window.\n");
-        exit(1);
-    }
-    // Done with the visual info data
-    XFree(vi);
-    XStoreName(display, window, "GL 3.0 Window");
-    printf("Mapping window\n");
-    XMapWindow(display, window);
-    // Get the default screen's GLX extension list
-    const char * glxExts = glXQueryExtensionsString(display, screen);
-    // NOTE: It is not necessary to create or make current to a context before
-    // calling glXGetProcAddressARB
-    glXCreateContextAttribsARBProc glXCreateContextAttribsARB = 0;
-    glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc)
-        glXGetProcAddressARB((const GLubyte *) "glXCreateContextAttribsARB");
-    XSetErrorHandler(&context_error_handler);
-    // Check for the GLX_ARB_create_context extension string and the function.
-    if (!is_extension_supported(glxExts, "GLX_ARB_create_context") ||
-            !glXCreateContextAttribsARB) {
-        printf("glXCreateContextAttribsARB() not found\n");
-        exit(-1);
-    }
-    int context_attribs[] = {
-        GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
-        GLX_CONTEXT_MINOR_VERSION_ARB, 0,
-        None
-    };
-    printf("Creating context\n");
-    context = glXCreateContextAttribsARB(display, bestFbc, 0,
-        True, context_attribs);
-    // Sync to ensure any errors generated are processed.
-    XSync(display, False);
-    printf("Created GL 3.0 context\n");
-    // Verifying that context is a direct context
-    if (!glXIsDirect(display, context)) {
-        printf("Indirect GLX rendering context obtained\n");
-    } else {
-        printf("Direct GLX rendering context obtained\n");
-    }
-    printf("Making context current\n");
-    glXMakeCurrent(display, window, context);
-    Atom delete_atom = XInternAtom(display, "WM_DELETE_WINDOW", True);
-    XSetWMProtocols(display, window, &delete_atom, 1);
-}
-
-static void
-free_opengl_window() {
-    glXMakeCurrent(display, 0, 0);
-    glXDestroyContext(display, context);
-    XDestroyWindow(display, window);
-    XFreeColormap(display, cmap);
-    XCloseDisplay(display);
+    orthogonal_projection(width, height);
+    window.x = x;
+    window.y = y;
+    window.width = width;
+    window.height = height;
 }
 
 int
 main(int argc, char * argv[]) {
-    init_opengl_window();
-    init_glew();
+    window_init();
     init_scene();
-    running = 1;
-    while (running) {
-        while (XPending(display)) {
-            XNextEvent(display, &event);
-            switch (event.type) {
-            case ClientMessage:
-                running = 0;
-                break;
-            case ConfigureNotify: {
-                int width = event.xconfigure.width;
-                int height = event.xconfigure.height;
-                process_resize_event(width, height);
-                printf("resize: %dx%d\n", width, height);
-                break;
-            }
-            }
-        }
-        draw_scene();
-        glXSwapBuffers(display, window);
-    }
-    free_opengl_window();
+    redraw_callback = draw_scene;
+    window_configuration_callback = process_resize_event;
+    window_event_loop();
     return 0;
 }
