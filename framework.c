@@ -17,6 +17,8 @@ typedef GLXContext (*glXCreateContextAttribsARBProc) (
 
 void (*redraw_callback)();
 void (*window_configuration_callback)(int x, int y, int width, int heignt);
+void (*move_callback)(int x, int y);
+void (*click_callback)(int x, int y);
 
 static int
 is_extension_supported(const char * extList, const char * extension) {
@@ -143,7 +145,7 @@ init_opengl_window() {
         RootWindow(display, vi->screen), vi->visual, AllocNone);
     swa.background_pixmap = None;
     swa.border_pixel = 0;
-    swa.event_mask = /*ExposureMask | */StructureNotifyMask;
+    swa.event_mask = ButtonPressMask | PointerMotionMask | StructureNotifyMask;
     printf("Creating window\n");
     window = XCreateWindow(display, RootWindow(display, vi->screen),
         0, 0, 640, 480, 0, vi->depth, InputOutput, vi->visual,
@@ -204,13 +206,15 @@ free_opengl_window() {
 }
 
 static void redraw_callback_stub() { }
-static void window_configuration_callback_stub(
-    int x, int y, int width, int heignt) { }
+static void window_configuration_callback_stub(int a, int b, int c, int d) { }
+static void move_callback_stub(int a, int b) { }
 
 extern void
 window_init() {
     redraw_callback = redraw_callback_stub;
     window_configuration_callback = window_configuration_callback_stub;
+    move_callback = move_callback_stub;
+    click_callback = move_callback_stub;
     init_opengl_window();
     init_glew();
 }
@@ -239,6 +243,12 @@ window_event_loop() {
                 redraw_callback();
                 glXSwapBuffers(display, window);
                 clock_gettime(CLOCK_MONOTONIC, &last_screen_update_time);
+                break;
+			case MotionNotify:
+                move_callback(event.xmotion.x, event.xmotion.y);
+				break;
+            case ButtonPress:
+                click_callback(event.xbutton.x, event.xbutton.y);
                 break;
             }
         }
