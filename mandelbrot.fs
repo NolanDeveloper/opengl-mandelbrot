@@ -1,6 +1,8 @@
 #version 130
 
-#define MAX_ITERATIONS 80
+#define MAX_ITERATIONS 200
+
+uniform sampler1D palette;
 
 in vec2 fragment_position;
 
@@ -19,5 +21,5 @@ void main(void) {
     }
     float f = i;
     float c = f / MAX_ITERATIONS;
-    fragment_color = vec4(c, c, 1 - c, 1);
+    fragment_color = texture(palette, c);/*vec4(c, c, 1 - c, 1);*/
 }

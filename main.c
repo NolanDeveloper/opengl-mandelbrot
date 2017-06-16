@@ -6,6 +6,7 @@
 #include <GL/gl.h>
 
 #include "framework.h"
+#include "png.h"
 
 static struct timespec last_reset_time;
 
@@ -87,6 +88,8 @@ static GLuint mandelbrot_shader;
 static GLuint background_mesh;
 static GLuint next_scale_rect;
 
+static GLuint palette_texture;
+
 static GLuint
 make_vertex_buffer(void * buffer_data, size_t size, GLenum type) {
     GLuint buffer_id;
@@ -94,6 +97,22 @@ make_vertex_buffer(void * buffer_data, size_t size, GLenum type) {
     glBindBuffer(GL_ARRAY_BUFFER, buffer_id);
     glBufferData(GL_ARRAY_BUFFER, size, buffer_data, type);
     return buffer_id;
+}
+
+static GLuint
+load_texture(const char * filename) {
+    unsigned width;
+    unsigned height;
+    char * texture_data = load_png(filename, &width, &height);
+    GLuint id;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_1D, id);
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, width * height, 0, GL_RGB,
+        GL_UNSIGNED_BYTE, texture_data);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    free(texture_data);
+    return id;
 }
 
 static void
@@ -117,6 +136,7 @@ init_scene() {
         sizeof(scale_rect_data), GL_DYNAMIC_DRAW);
     mandelbrot_shader = compile_program("mandelbrot.vs", "mandelbrot.fs");
     simple_shader = compile_program("simple.vs", "simple.fs");
+    palette_texture = load_texture("palette.png");
     glClearColor(0, 0, 0, 0);
 }
 
@@ -149,8 +169,11 @@ draw_scene() {
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, background_mesh);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    glUniform2fv(0, 1, focus);
-    glUniform1f(1, scale);
+    glUniform2fv(glGetUniformLocation(mandelbrot_shader, "focus"), 1, focus);
+    glUniform1f(glGetUniformLocation(mandelbrot_shader, "scale"), scale);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_1D, palette_texture);
+    glUniform1i(glGetUniformLocation(mandelbrot_shader, "palette"), 0);
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     glDisableVertexAttribArray(0);
     // Draw scale rectangle
